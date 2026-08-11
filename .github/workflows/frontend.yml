@@ -1,17 +1,17 @@
 
-name: Test Frontend EC2 SSH
+name: Frontend to Public EC2
 
 on:
   workflow_dispatch:
 
 jobs:
-  test-ssh:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
 
       # ==================================================
-      # TEST SSH CONNECTION
+      # 1. TEST SSH
       # ==================================================
 
       - name: Test SSH Connection
@@ -28,48 +28,478 @@ jobs:
             set -e
 
             echo "=========================================="
-            echo "       SSH CONNECTION SUCCESS"
+            echo "SSH CONNECTION SUCCESS"
             echo "=========================================="
 
-            echo ""
-            echo "Current User:"
             whoami
-
-            echo ""
-            echo "Hostname:"
             hostname
+            python3 --version
+            git --version
 
-            echo ""
-            echo "OS:"
-            cat /etc/os-release | head -5
-
-            echo ""
-            echo "Python:"
-            python3 --version || true
-
-            echo ""
-            echo "Git:"
-            git --version || true
-
-            echo ""
-            echo "Disk:"
-            df -h /
-
-            echo ""
-            echo "Memory:"
-            free -h || true
-
-            echo ""
-            echo "Port 22:"
-            sudo ss -lntp | grep ':22' || true
-
-            echo ""
             echo "=========================================="
-            echo "       SSH TEST COMPLETED SUCCESSFULLY"
-            echo "=========================================="
-            
 
 
+      # ==================================================
+      # 2. DEPLOY FRONTEND
+      # ==================================================
+
+      - name: Deploy Frontend
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 30m
+
+          script: |
+            set -e
+
+            echo "=================================================="
+            echo "        FRONTEND DEPLOYMENT STARTED"
+            echo "=================================================="
 
 
+            # ==================================================
+            # VARIABLES
+            # ==================================================
+
+            APP_DIR="/home/ec2-user/front"
+            REPO_NAME="Java-springboot-project"
+            REPO_URL="https://github.com/CloudTechDevOps/Java-springboot-project.git"
+
+            FRONTEND_DIR="$APP_DIR/$REPO_NAME/frontend"
+
+            BACKEND_IP="${{ secrets.BACKEND_PRIVATE_IP }}"
+
+
+            echo "APP_DIR:"
+            echo "$APP_DIR"
+
+            echo "REPO_NAME:"
+            echo "$REPO_NAME"
+
+            echo "FRONTEND_DIR:"
+            echo "$FRONTEND_DIR"
+
+            echo "BACKEND_IP:"
+            echo "$BACKEND_IP"
+
+
+            # ==================================================
+            # CHECK BACKEND IP
+            # ==================================================
+
+            if [ -z "$BACKEND_IP" ]; then
+
+              echo "ERROR: BACKEND_PRIVATE_IP secret is empty"
+
+              exit 1
+
+            fi
+
+
+            # ==================================================
+            # CREATE APP DIRECTORY
+            # ==================================================
+
+            echo "=================================================="
+            echo "Creating application directory"
+            echo "=================================================="
+
+            mkdir -p "$APP_DIR"
+
+            cd "$APP_DIR"
+
+
+            # ==================================================
+            # CLONE / UPDATE REPOSITORY
+            # ==================================================
+
+            echo "=================================================="
+            echo "Updating repository"
+            echo "=================================================="
+
+            if [ -d "$REPO_NAME/.git" ]; then
+
+              echo "Repository already exists"
+
+              cd "$REPO_NAME"
+
+              git fetch origin
+
+              git checkout main
+
+              git reset --hard origin/main
+
+              git clean -fd
+
+            else
+
+              echo "Repository does not exist"
+
+              echo "Cloning repository..."
+
+              git clone "$REPO_URL" "$REPO_NAME"
+
+              cd "$REPO_NAME"
+
+            fi
+
+
+            # ==================================================
+            # SHOW REPOSITORY
+            # ==================================================
+
+            echo "=================================================="
+            echo "Repository information"
+            echo "=================================================="
+
+            echo "Current directory:"
+            pwd
+
+            echo "Current commit:"
+            git rev-parse --short HEAD
+
+            echo "Repository files:"
+            ls -la
+
+
+            # ==================================================
+            # CHECK FRONTEND
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking frontend"
+            echo "=================================================="
+
+            if [ ! -d "$FRONTEND_DIR" ]; then
+
+              echo "ERROR: Frontend directory not found"
+
+              echo "Expected:"
+              echo "$FRONTEND_DIR"
+
+              echo ""
+              echo "Actual repository structure:"
+
+              find "$APP_DIR/$REPO_NAME" \
+                -maxdepth 3 \
+                -type f \
+                | sort
+
+              exit 1
+
+            fi
+
+
+            cd "$FRONTEND_DIR"
+
+
+            echo "Frontend directory:"
+            pwd
+
+            echo "Frontend files:"
+            ls -la
+
+
+            # ==================================================
+            # CHECK APP FILES
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking application files"
+            echo "=================================================="
+
+            if [ ! -f "app.py" ]; then
+
+              echo "ERROR: app.py not found"
+
+              exit 1
+
+            fi
+
+
+            if [ ! -f "requirements.txt" ]; then
+
+              echo "ERROR: requirements.txt not found"
+
+              exit 1
+
+            fi
+
+
+            echo "app.py found"
+            echo "requirements.txt found"
+
+
+            # ==================================================
+            # INSTALL PYTHON PACKAGES
+            # ==================================================
+
+            echo "=================================================="
+            echo "Installing Python packages"
+            echo "=================================================="
+
+            sudo dnf install -y \
+              python3 \
+              python3-pip \
+              python3-devel
+
+
+            # ==================================================
+            # CREATE VENV
+            # ==================================================
+
+            echo "=================================================="
+            echo "Creating virtual environment"
+            echo "=================================================="
+
+            if [ ! -f "venv/bin/python" ]; then
+
+              rm -rf venv
+
+              python3 -m venv venv
+
+            fi
+
+
+            # ==================================================
+            # OWNERSHIP
+            # ==================================================
+
+            sudo chown -R ec2-user:ec2-user "$FRONTEND_DIR"
+
+
+            # ==================================================
+            # INSTALL REQUIREMENTS
+            # ==================================================
+
+            echo "=================================================="
+            echo "Installing requirements"
+            echo "=================================================="
+
+            ./venv/bin/python -m pip install --upgrade pip
+
+            ./venv/bin/python -m pip install -r requirements.txt
+
+
+            # ==================================================
+            # CHECK STREAMLIT
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking Streamlit"
+            echo "=================================================="
+
+            ./venv/bin/python -m streamlit --version
+
+
+            # ==================================================
+            # STOP OLD SERVICE
+            # ==================================================
+
+            echo "=================================================="
+            echo "Stopping old service"
+            echo "=================================================="
+
+            sudo systemctl stop frontend.service || true
+
+
+            # ==================================================
+            # CREATE SYSTEMD SERVICE
+            # ==================================================
+
+            echo "=================================================="
+            echo "Creating systemd service"
+            echo "=================================================="
+
+            sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
+[Unit]
+Description=Streamlit Frontend Application
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+
+WorkingDirectory=$FRONTEND_DIR
+
+ExecStart=$FRONTEND_DIR/venv/bin/python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
+
+Environment=API_URL=http://$BACKEND_IP:8084
+
+Restart=always
+RestartSec=5
+
+StandardOutput=append:/home/ec2-user/frontend.log
+StandardError=append:/home/ec2-user/frontend-error.log
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+
+            # ==================================================
+            # SHOW SERVICE
+            # ==================================================
+
+            echo "=================================================="
+            echo "Systemd configuration"
+            echo "=================================================="
+
+            sudo cat /etc/systemd/system/frontend.service
+
+
+            # ==================================================
+            # RELOAD SYSTEMD
+            # ==================================================
+
+            sudo systemctl daemon-reload
+
+
+            # ==================================================
+            # ENABLE SERVICE
+            # ==================================================
+
+            sudo systemctl enable frontend.service
+
+
+            # ==================================================
+            # START SERVICE
+            # ==================================================
+
+            echo "=================================================="
+            echo "Starting frontend"
+            echo "=================================================="
+
+            sudo systemctl restart frontend.service
+
+
+            # ==================================================
+            # WAIT
+            # ==================================================
+
+            sleep 10
+
+
+            # ==================================================
+            # SERVICE CHECK
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking service"
+            echo "=================================================="
+
+            if ! sudo systemctl is-active --quiet frontend.service; then
+
+              echo "ERROR: Frontend service failed"
+
+              echo ""
+              echo "SYSTEMD STATUS:"
+              sudo systemctl status frontend.service --no-pager -l || true
+
+              echo ""
+              echo "JOURNAL:"
+              sudo journalctl \
+                -u frontend.service \
+                --no-pager \
+                -n 100 || true
+
+              echo ""
+              echo "ERROR LOG:"
+              sudo cat /home/ec2-user/frontend-error.log || true
+
+              exit 1
+
+            fi
+
+
+            echo "Frontend service is running"
+
+
+            # ==================================================
+            # PORT CHECK
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking port 8501"
+            echo "=================================================="
+
+            if ! sudo ss -lntp | grep -q ":8501"; then
+
+              echo "ERROR: Port 8501 is not listening"
+
+              sudo journalctl \
+                -u frontend.service \
+                --no-pager \
+                -n 100 || true
+
+              exit 1
+
+            fi
+
+
+            echo "Port 8501 is listening"
+
+
+            # ==================================================
+            # HTTP CHECK
+            # ==================================================
+
+            echo "=================================================="
+            echo "Checking HTTP"
+            echo "=================================================="
+
+            HTTP_CODE=$(curl \
+              -s \
+              -o /dev/null \
+              -w "%{http_code}" \
+              --max-time 15 \
+              http://127.0.0.1:8501/)
+
+
+            echo "HTTP Status:"
+            echo "$HTTP_CODE"
+
+
+            if [ "$HTTP_CODE" != "200" ]; then
+
+              echo "ERROR: HTTP check failed"
+
+              sudo systemctl status \
+                frontend.service \
+                --no-pager \
+                -l || true
+
+              sudo journalctl \
+                -u frontend.service \
+                --no-pager \
+                -n 100 || true
+
+              sudo cat \
+                /home/ec2-user/frontend-error.log || true
+
+              exit 1
+
+            fi
+
+
+            # ==================================================
+            # SUCCESS
+            # ==================================================
+
+            echo "=================================================="
+            echo "     FRONTEND DEPLOYMENT SUCCESSFUL"
+            echo "=================================================="
+
+            echo "Frontend URL:"
+            echo "http://${{ secrets.EC2_HOST }}:8501"
+
+            echo "Backend:"
+            echo "http://$BACKEND_IP:8084"
+
+            echo "=================================================="
 
