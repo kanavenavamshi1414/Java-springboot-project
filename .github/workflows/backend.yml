@@ -1,9 +1,6 @@
 name: Backend to EC2
 
 on:
-  # push:
-  #   branches:
-  #     - main
   workflow_dispatch:
 
 jobs:
@@ -20,153 +17,99 @@ jobs:
           distribution: temurin
           java-version: 17
           cache: maven
-      
-      # - name: Build and SonarQube Scan
-      #   working-directory: backend
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      #     SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-      #   run: |
-      #     mvn clean verify sonar:sonar \
-      #       -DskipTests \
-      #       -Dsonar.projectKey=backend \
-      #       -Dsonar.projectName=backend \
-      #       -Dsonar.host.url=$SONAR_HOST_URL \
-      #       -Dsonar.token=$SONAR_TOKEN
-      
-      # - name: SonarQube Quality Gate
-      #   uses: SonarSource/sonarqube-quality-gate-action@v1.2.0
-      #   with:
-      #     scanMetadataReportFile: backend/target/sonar/report-task.txt
-      #   timeout-minutes: 10
-      #   env:
-      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-      - name: Prepare EC2
-        uses: appleboy/ssh-action@v1.1.0
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            set -e
-            sudo yum install -y git maven java-17-amazon-corretto
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
 
-      - name: Clone / Pull Repository
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            set -e
-            APP_DIR=/home/ec2-user/app
-            REPO_NAME=Java-springboot-project
-            REPO_URL=https://github.com/CloudTechDevOps/Java-springboot-project.git
-            mkdir -p $APP_DIR
-            cd $APP_DIR
-            if [ -d "$REPO_NAME/.git" ]; then
-              cd $REPO_NAME
-              git reset --hard
-              git pull origin main
-            else
-              git clone $REPO_URL
-              cd $REPO_NAME
-            fi
+      - name: Deploy to Private EC2 using SSM
+        shell: bash
+        run: |
+          set -e
 
-      - name: Build Maven Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            cd /home/ec2-user/app/Java-springboot-project/backend
-            mvn clean package -DskipTests -U
+          echo "Sending deployment command to EC2..."
 
-      - name: Stop Old Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script_stop: false
-          script: |
-            PID=$(ps -ef | grep '[d]atastore-0.0.7.jar' | awk '{print $2}')
-      
-            if [ -z "$PID" ]; then
-              echo "Application is not running."
-              exit 0
-            fi
-      
-            echo "Stopping PID: $PID"
-            kill -15 $PID
-            sleep 5
-      
-            if ps -p $PID > /dev/null 2>&1; then
-              echo "Force killing PID: $PID"
-              kill -9 $PID
-            fi
-      
-            echo "Application stopped."
+          COMMAND_ID=$(aws ssm send-command \
+            --region eu-north-1 \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Spring Boot Backend" \
+            --parameters 'commands=[
+              "set -e",
 
-      - name: Start Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            LOG_DIR=/var/log/app
-            sudo mkdir -p $LOG_DIR
-            sudo chown ec2-user:ec2-user $LOG_DIR
-            cd /home/ec2-user/app/Java-springboot-project/backend/target
-            nohup env \
-              MYSQL_HOST=${{ secrets.DB_HOST }} \
-              MYSQL_PORT=3306 \
-              MYSQL_USERNAME=${{ secrets.DB_USERNAME }} \
-              MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }} \
-              LOG_FILE_PATH=$LOG_DIR/datastore.log \
-              java -jar datastore-0.0.7.jar --server.port=8084 \
-              > $LOG_DIR/nohup.out 2>&1 &
+              "echo Installing required packages...",
+              "sudo yum install -y git maven java-17-amazon-corretto",
 
-      - name: Wait for App Startup
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: sleep 15
+              "echo Preparing application directory...",
+              "APP_DIR=/home/ec2-user/app",
+              "REPO_NAME=Java-springboot-project",
+              "REPO_URL=https://github.com/CloudTechDevOps/Java-springboot-project.git",
 
-      - name: Verify Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            HEALTH=$(curl -s http://localhost:8084/actuator/health)
-            echo "$HEALTH"
-            [[ "$HEALTH" == *'"status":"UP"'* ]]
+              "mkdir -p $APP_DIR",
+              "cd $APP_DIR",
 
-      - name: Send Deployment Report
-        if: always()
-        uses: dawidd6/action-send-mail@v3
-        with:
-          server_address: smtp.gmail.com
-          server_port: 465
-          secure: true
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: Backend Deployment Report - ${{ github.repository }}
-          to: ${{ secrets.EMAIL_TO }}
-          from: ${{ secrets.EMAIL_USERNAME }}
-          body: |
-            Repository: ${{ github.repository }}
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
-            Status: ${{ job.status }}
-            Actor: ${{ github.actor }}
-            Workflow: ${{ github.workflow }}
-            SonarQube: Completed
-            Quality Gate: Passed if workflow succeeded.
+              "if [ -d \"$REPO_NAME/.git\" ]; then cd $REPO_NAME && git reset --hard && git pull origin main; else git clone $REPO_URL && cd $REPO_NAME; fi",
+
+              "echo Building application...",
+              "cd /home/ec2-user/app/Java-springboot-project/backend",
+              "mvn clean package -DskipTests -U",
+
+              "echo Stopping old application...",
+              "PID=$(pgrep -f \"datastore-0.0.7.jar\" || true)",
+              "if [ -n \"$PID\" ]; then kill -15 $PID || true; sleep 5; fi",
+
+              "PID=$(pgrep -f \"datastore-0.0.7.jar\" || true)",
+              "if [ -n \"$PID\" ]; then kill -9 $PID || true; fi",
+
+              "echo Starting application...",
+              "LOG_DIR=/var/log/app",
+              "sudo mkdir -p $LOG_DIR",
+              "sudo chown ec2-user:ec2-user $LOG_DIR",
+
+              "cd /home/ec2-user/app/Java-springboot-project/backend/target",
+
+              "nohup env MYSQL_HOST=\"${{ secrets.DB_HOST }}\" MYSQL_PORT=3306 MYSQL_USERNAME=\"${{ secrets.DB_USERNAME }}\" MYSQL_PASSWORD=\"${{ secrets.DB_PASSWORD }}\" LOG_FILE_PATH=$LOG_DIR/datastore.log java -jar datastore-0.0.7.jar --server.port=8084 --server.address=0.0.0.0 > $LOG_DIR/nohup.out 2>&1 &",
+
+              "echo Waiting for application...",
+              "sleep 15",
+
+              "echo Checking application health...",
+              "HEALTH=$(curl -s http://localhost:8084/actuator/health)",
+              "echo $HEALTH",
+
+              "echo $HEALTH | grep -q '\"status\":\"UP\"'",
+
+              "echo Deployment successful!"
+            ]' \
+            --query 'Command.CommandId' \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          echo "Waiting for EC2 command to complete..."
+
+          aws ssm wait command-executed \
+            --region eu-north-1 \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}"
+
+          echo "Getting deployment output..."
+
+          aws ssm get-command-invocation \
+            --region eu-north-1 \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'StandardOutputContent' \
+            --output text
+
+          echo "Getting deployment errors..."
+
+          aws ssm get-command-invocation \
+            --region eu-north-1 \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --query 'StandardErrorContent' \
+            --output text
