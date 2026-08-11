@@ -1,4 +1,4 @@
-name: Backend to EC2
+name: Backend to Private EC2
 
 on:
   workflow_dispatch:
@@ -8,108 +8,200 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ==========================================
+      # 1. Checkout Repository
+      # ==========================================
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+
+      # ==========================================
+      # 2. Setup Java
+      # ==========================================
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
           cache: maven
 
+
+      # ==========================================
+      # 3. Configure AWS Credentials
+      # ==========================================
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-north-1
 
-      - name: Deploy to Private EC2 using SSM
+
+      # ==========================================
+      # 4. Check SSM
+      # ==========================================
+      - name: Check EC2 SSM Connection
+        run: |
+          echo "Checking SSM managed instances..."
+
+          aws ssm describe-instance-information \
+            --region eu-north-1
+
+          echo "Checking selected EC2 instance..."
+
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=${{ secrets.EC2_INSTANCE_ID }}" \
+            --region eu-north-1
+
+
+      # ==========================================
+      # 5. Deploy Backend using SSM
+      # ==========================================
+      - name: Deploy Backend using SSM
         shell: bash
         run: |
-          set -e
 
           echo "Sending deployment command to EC2..."
 
           COMMAND_ID=$(aws ssm send-command \
-            --region eu-north-1 \
             --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Spring Boot Backend" \
             --parameters 'commands=[
               "set -e",
 
-              "echo Installing required packages...",
-              "sudo yum install -y git maven java-17-amazon-corretto",
+              "echo ==============================",
+              "echo Starting Backend Deployment",
+              "echo ==============================",
 
-              "echo Preparing application directory...",
-              "APP_DIR=/home/ec2-user/app",
-              "REPO_NAME=Java-springboot-project",
-              "REPO_URL=https://github.com/CloudTechDevOps/Java-springboot-project.git",
+              "echo Checking application directory",
+              "cd /home/ec2-user/app/Java-springboot-project",
 
-              "mkdir -p $APP_DIR",
-              "cd $APP_DIR",
+              "echo Updating repository",
+              "git reset --hard",
+              "git clean -fd",
+              "git pull origin main",
 
-              "if [ -d \"$REPO_NAME/.git\" ]; then cd $REPO_NAME && git reset --hard && git pull origin main; else git clone $REPO_URL && cd $REPO_NAME; fi",
+              "echo Moving to backend directory",
+              "cd backend",
 
-              "echo Building application...",
-              "cd /home/ec2-user/app/Java-springboot-project/backend",
+              "echo Building Spring Boot application",
               "mvn clean package -DskipTests -U",
 
-              "echo Stopping old application...",
-              "PID=$(pgrep -f \"datastore-0.0.7.jar\" || true)",
-              "if [ -n \"$PID\" ]; then kill -15 $PID || true; sleep 5; fi",
+              "echo ==============================",
+              "echo Stopping old application",
+              "echo ==============================",
 
-              "PID=$(pgrep -f \"datastore-0.0.7.jar\" || true)",
-              "if [ -n \"$PID\" ]; then kill -9 $PID || true; fi",
+              "sudo systemctl stop datastore.service || true",
 
-              "echo Starting application...",
-              "LOG_DIR=/var/log/app",
-              "sudo mkdir -p $LOG_DIR",
-              "sudo chown ec2-user:ec2-user $LOG_DIR",
+              "sleep 5",
 
-              "cd /home/ec2-user/app/Java-springboot-project/backend/target",
+              "echo ==============================",
+              "echo Starting new application",
+              "echo ==============================",
 
-              "nohup env MYSQL_HOST=\"${{ secrets.DB_HOST }}\" MYSQL_PORT=3306 MYSQL_USERNAME=\"${{ secrets.DB_USERNAME }}\" MYSQL_PASSWORD=\"${{ secrets.DB_PASSWORD }}\" LOG_FILE_PATH=$LOG_DIR/datastore.log java -jar datastore-0.0.7.jar --server.port=8084 --server.address=0.0.0.0 > $LOG_DIR/nohup.out 2>&1 &",
+              "sudo systemctl start datastore.service",
 
-              "echo Waiting for application...",
+              "echo Waiting for application startup",
               "sleep 15",
 
-              "echo Checking application health...",
-              "HEALTH=$(curl -s http://localhost:8084/actuator/health)",
-              "echo $HEALTH",
+              "echo ==============================",
+              "echo Checking systemd status",
+              "echo ==============================",
 
-              "echo $HEALTH | grep -q '\"status\":\"UP\"'",
+              "sudo systemctl status datastore.service --no-pager",
 
-              "echo Deployment successful!"
+              "echo ==============================",
+              "echo Checking application health",
+              "echo ==============================",
+
+              "HEALTH=$(curl -sf http://localhost:8084/actuator/health)",
+              "echo \"$HEALTH\"",
+
+              "echo \"$HEALTH\" | grep -q '\''\"status\":\"UP\"'\''",
+
+              "echo ==============================",
+              "echo Deployment successful!",
+              "echo =============================="
             ]' \
-            --query 'Command.CommandId' \
+            --timeout-seconds 600 \
+            --region eu-north-1 \
+            --query "Command.CommandId" \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          echo "Waiting for EC2 command to complete..."
+          echo "Waiting for deployment to finish..."
 
           aws ssm wait command-executed \
-            --region eu-north-1 \
             --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}"
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region eu-north-1
 
           echo "Getting deployment output..."
 
           aws ssm get-command-invocation \
-            --region eu-north-1 \
             --command-id "$COMMAND_ID" \
             --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --query 'StandardOutputContent' \
+            --region eu-north-1 \
+            --query "StandardOutputContent" \
             --output text
 
           echo "Getting deployment errors..."
 
           aws ssm get-command-invocation \
-            --region eu-north-1 \
             --command-id "$COMMAND_ID" \
             --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --query 'StandardErrorContent' \
+            --region eu-north-1 \
+            --query "StandardErrorContent" \
             --output text
+
+
+      # ==========================================
+      # 6. Final Health Check
+      # ==========================================
+      - name: Verify Backend
+        shell: bash
+        run: |
+
+          echo "Running final health check through SSM..."
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Verify Spring Boot Backend" \
+            --parameters 'commands=[
+              "echo Checking datastore service",
+              "sudo systemctl is-active datastore.service",
+
+              "echo Checking port 8084",
+              "sudo ss -lntp | grep :8084",
+
+              "echo Checking Spring Boot health endpoint",
+              "curl -sf http://localhost:8084/actuator/health",
+
+              "echo Backend verification successful"
+            ]' \
+            --timeout-seconds 120 \
+            --region eu-north-1 \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "Health Check Command ID: $COMMAND_ID"
+
+          aws ssm wait command-executed \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region eu-north-1
+
+          echo "Health check output:"
+
+          aws ssm get-command-invocation \
+            --command-id "$COMMAND_ID" \
+            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
+            --region eu-north-1 \
+            --query "StandardOutputContent" \
+            --output text
+
+          echo "Backend deployment completed successfully."
