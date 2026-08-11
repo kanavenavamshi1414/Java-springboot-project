@@ -1,4 +1,19 @@
-```yaml
+
+name: Test Frontend EC2 SSH
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-ssh:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==================================================
+      # TEST SSH CONNECTION
+      # ==================================================
+
       - name: Test SSH Connection
         uses: appleboy/ssh-action@v1.1.0
         with:
@@ -10,26 +25,51 @@
           command_timeout: 5m
 
           script: |
+            set -e
+
             echo "=========================================="
-            echo "SSH CONNECTION SUCCESS"
+            echo "       SSH CONNECTION SUCCESS"
             echo "=========================================="
 
+            echo ""
+            echo "Current User:"
             whoami
+
+            echo ""
+            echo "Hostname:"
             hostname
 
+            echo ""
             echo "OS:"
             cat /etc/os-release | head -5
 
+            echo ""
             echo "Python:"
             python3 --version || true
 
+            echo ""
             echo "Git:"
             git --version || true
 
+            echo ""
             echo "Disk:"
             df -h /
 
+            echo ""
+            echo "Memory:"
+            free -h || true
+
+            echo ""
+            echo "Port 22:"
+            sudo ss -lntp | grep ':22' || true
+
+            echo ""
             echo "=========================================="
-            echo "SSH TEST COMPLETE"
+            echo "       SSH TEST COMPLETED SUCCESSFULLY"
             echo "=========================================="
-```
+            
+
+
+
+
+
