@@ -10,33 +10,16 @@ jobs:
 
     steps:
 
-      # ==================================================
-      # CHECKOUT
-      # ==================================================
-
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-
-      # ==================================================
-      # CHECKOUT CHECK
-      # ==================================================
-
-      - name: Check Frontend
+      - name: Verify Frontend
         run: |
-          echo "Checking frontend directory..."
-          ls -la
-          echo "----------------------------------"
-          ls -la frontend
-          echo "----------------------------------"
+          echo "Checking frontend..."
           test -f frontend/app.py
           test -f frontend/requirements.txt
-          echo "Frontend files found successfully."
-
-
-      # ==================================================
-      # COPY FRONTEND TO EC2
-      # ==================================================
+          echo "Frontend files found."
+          ls -la frontend
 
       - name: Copy Frontend to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -49,11 +32,6 @@ jobs:
           target: "/home/ec2-user/front"
           overwrite: true
           timeout: 60s
-
-
-      # ==================================================
-      # DEPLOY ON EC2
-      # ==================================================
 
       - name: Deploy Frontend
         uses: appleboy/ssh-action@v1.1.0
@@ -72,43 +50,20 @@ jobs:
             echo "FRONTEND DEPLOYMENT STARTED"
             echo "=========================================="
 
-            whoami
-            hostname
-
+            FRONTEND_DIR="/home/ec2-user/front/frontend"
             BACKEND_IP="${{ secrets.BACKEND_PRIVATE_IP }}"
 
-            FRONTEND_DIR="/home/ec2-user/front/frontend"
-
-            echo "Frontend directory:"
-            echo "$FRONTEND_DIR"
-
-            echo "Backend IP:"
-            echo "$BACKEND_IP"
-
-
-            # ==========================================
-            # CHECK BACKEND IP
-            # ==========================================
+            echo "Frontend: $FRONTEND_DIR"
+            echo "Backend: $BACKEND_IP:8084"
 
             if [ -z "$BACKEND_IP" ]; then
               echo "ERROR: BACKEND_PRIVATE_IP is empty"
               exit 1
             fi
 
-
-            # ==========================================
-            # CHECK FRONTEND
-            # ==========================================
-
-            echo "Checking frontend files..."
-
-            if [ ! -d "$FRONTEND_DIR" ]; then
-              echo "ERROR: Frontend directory does not exist"
-              exit 1
-            fi
-
             if [ ! -f "$FRONTEND_DIR/app.py" ]; then
               echo "ERROR: app.py not found"
+              ls -la "$FRONTEND_DIR"
               exit 1
             fi
 
@@ -117,222 +72,91 @@ jobs:
               exit 1
             fi
 
-            ls -la "$FRONTEND_DIR"
+            echo "Frontend files verified."
 
-
-            # ==========================================
-            # INSTALL PYTHON
-            # ==========================================
-
-            echo "Installing Python..."
-
-            sudo dnf install -y \
-              python3 \
-              python3-pip \
-              python3-devel
-
-
-            # ==========================================
-            # OWNERSHIP
-            # ==========================================
+            sudo dnf install -y python3 python3-pip python3-devel
 
             sudo chown -R ec2-user:ec2-user "$FRONTEND_DIR"
-
-
-            # ==========================================
-            # CREATE VIRTUAL ENVIRONMENT
-            # ==========================================
-
-            echo "Creating Python virtual environment..."
 
             if [ ! -f "$FRONTEND_DIR/venv/bin/python" ]; then
               rm -rf "$FRONTEND_DIR/venv"
               python3 -m venv "$FRONTEND_DIR/venv"
             fi
 
+            "$FRONTEND_DIR/venv/bin/python" -m pip install --upgrade pip
 
-            # ==========================================
-            # INSTALL REQUIREMENTS
-            # ==========================================
+            "$FRONTEND_DIR/venv/bin/python" -m pip install -r "$FRONTEND_DIR/requirements.txt"
 
-            echo "Installing Python dependencies..."
-
-            "$FRONTEND_DIR/venv/bin/python" \
-              -m pip install --upgrade pip
-
-            "$FRONTEND_DIR/venv/bin/python" \
-              -m pip install -r "$FRONTEND_DIR/requirements.txt"
-
-
-            # ==========================================
-            # CHECK STREAMLIT
-            # ==========================================
-
-            echo "Checking Streamlit..."
-
-            "$FRONTEND_DIR/venv/bin/python" \
-              -m streamlit --version
-
-
-            # ==========================================
-            # STOP OLD SERVICE
-            # ==========================================
-
-            echo "Stopping old frontend service..."
+            "$FRONTEND_DIR/venv/bin/python" -m streamlit --version
 
             sudo systemctl stop frontend.service || true
 
-
-            # ==========================================
-            # CREATE SYSTEMD SERVICE
-            # ==========================================
-
-            echo "Creating systemd service..."
-
             sudo rm -f /etc/systemd/system/frontend.service
 
-            sudo bash -c "cat > /etc/systemd/system/frontend.service" <<SERVICE
-[Unit]
-Description=Streamlit Frontend Application
-After=network.target
-
-[Service]
-Type=simple
-User=ec2-user
-Group=ec2-user
-WorkingDirectory=$FRONTEND_DIR
-ExecStart=$FRONTEND_DIR/venv/bin/python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
-Environment=API_URL=http://$BACKEND_IP:8084
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
-
-
-            # ==========================================
-            # SHOW SERVICE
-            # ==========================================
-
-            echo "Systemd service:"
-
-            sudo cat /etc/systemd/system/frontend.service
-
-
-            # ==========================================
-            # RELOAD SYSTEMD
-            # ==========================================
+            sudo bash -c "printf '%s\n' \
+            '[Unit]' \
+            'Description=Streamlit Frontend Application' \
+            'After=network.target' \
+            '' \
+            '[Service]' \
+            'Type=simple' \
+            'User=ec2-user' \
+            'Group=ec2-user' \
+            'WorkingDirectory=$FRONTEND_DIR' \
+            'ExecStart=$FRONTEND_DIR/venv/bin/python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true' \
+            'Environment=API_URL=http://$BACKEND_IP:8084' \
+            'Restart=always' \
+            'RestartSec=5' \
+            '' \
+            '[Install]' \
+            'WantedBy=multi-user.target' \
+            > /etc/systemd/system/frontend.service"
 
             sudo systemctl daemon-reload
 
             sudo systemctl enable frontend.service
 
-
-            # ==========================================
-            # START FRONTEND
-            # ==========================================
-
-            echo "Starting frontend..."
-
             sudo systemctl restart frontend.service
 
-
-            # ==========================================
-            # WAIT
-            # ==========================================
+            echo "Waiting for Streamlit..."
 
             sleep 10
 
-
-            # ==========================================
-            # SERVICE STATUS
-            # ==========================================
-
-            echo "Checking service..."
-
             if ! sudo systemctl is-active --quiet frontend.service; then
+              echo "ERROR: frontend.service failed"
 
-              echo "ERROR: Frontend service failed"
+              sudo systemctl status frontend.service --no-pager -l || true
 
-              echo "========== STATUS =========="
-
-              sudo systemctl status \
-                frontend.service \
-                --no-pager \
-                -l || true
-
-              echo "========== JOURNAL =========="
-
-              sudo journalctl \
-                -u frontend.service \
-                --no-pager \
-                -n 100 || true
+              sudo journalctl -u frontend.service --no-pager -n 100 || true
 
               exit 1
             fi
 
             echo "Frontend service is running."
 
-
-            # ==========================================
-            # PORT CHECK
-            # ==========================================
-
-            echo "Checking port 8501..."
-
             if ! sudo ss -lntp | grep -q ":8501"; then
-
               echo "ERROR: Port 8501 is not listening"
 
-              sudo journalctl \
-                -u frontend.service \
-                --no-pager \
-                -n 100 || true
+              sudo journalctl -u frontend.service --no-pager -n 100 || true
 
               exit 1
             fi
 
             echo "Port 8501 is listening."
 
-
-            # ==========================================
-            # HTTP CHECK
-            # ==========================================
-
-            echo "Checking HTTP..."
-
-            HTTP_CODE=$(curl \
-              -s \
-              -o /dev/null \
-              -w "%{http_code}" \
-              --max-time 15 \
-              http://127.0.0.1:8501/)
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 http://127.0.0.1:8501/)
 
             echo "HTTP Status: $HTTP_CODE"
 
-
             if [ "$HTTP_CODE" != "200" ]; then
+              echo "ERROR: Streamlit HTTP check failed"
 
-              echo "ERROR: HTTP check failed"
+              sudo systemctl status frontend.service --no-pager -l || true
 
-              sudo systemctl status \
-                frontend.service \
-                --no-pager \
-                -l || true
-
-              sudo journalctl \
-                -u frontend.service \
-                --no-pager \
-                -n 100 || true
+              sudo journalctl -u frontend.service --no-pager -n 100 || true
 
               exit 1
             fi
-
-
-            # ==========================================
-            # SUCCESS
-            # ==========================================
 
             echo "=========================================="
             echo "FRONTEND DEPLOYMENT SUCCESSFUL"
