@@ -44,17 +44,23 @@ jobs:
 
 
       # ==========================================
-      # 4. Verify AWS Identity
+      # 4. Verify AWS Credentials
       # ==========================================
       - name: Verify AWS Credentials
         run: |
-          echo "Checking AWS identity..."
+
+          echo "=========================================="
+          echo "AWS IDENTITY"
+          echo "=========================================="
+
           aws sts get-caller-identity
 
-          echo "AWS Region:"
+          echo ""
+          echo "AWS REGION:"
           echo "$AWS_REGION"
 
-          echo "EC2 Instance:"
+          echo ""
+          echo "EC2 INSTANCE:"
           echo "$EC2_INSTANCE_ID"
 
 
@@ -64,7 +70,9 @@ jobs:
       - name: Check EC2 Instance
         run: |
 
-          echo "Checking EC2 instance..."
+          echo "=========================================="
+          echo "CHECKING EC2 INSTANCE"
+          echo "=========================================="
 
           aws ec2 describe-instances \
             --instance-ids "$EC2_INSTANCE_ID" \
@@ -79,7 +87,9 @@ jobs:
       - name: Check SSM Connection
         run: |
 
-          echo "Checking SSM managed instance..."
+          echo "=========================================="
+          echo "CHECKING SSM CONNECTION"
+          echo "=========================================="
 
           aws ssm describe-instance-information \
             --filters "Key=InstanceIds,Values=$EC2_INSTANCE_ID" \
@@ -98,7 +108,7 @@ jobs:
           set -e
 
           echo "=========================================="
-          echo "Sending deployment command to private EC2"
+          echo "STARTING BACKEND DEPLOYMENT"
           echo "=========================================="
 
           COMMAND_ID=$(aws ssm send-command \
@@ -110,26 +120,39 @@ jobs:
               "set -e",
 
               "echo ==========================================",
-              "echo Starting Backend Deployment",
+              "echo Checking Current User",
               "echo ==========================================",
-
-              "echo Checking current user",
               "whoami",
 
+              "echo ==========================================",
               "echo Checking Java",
+              "echo ==========================================",
               "java -version",
 
+              "echo ==========================================",
               "echo Checking Maven",
+              "echo ==========================================",
               "mvn -version",
 
-              "echo Checking application directory",
-              "cd /home/ec2-user/app/Java-springboot-project",
+              "echo ==========================================",
+              "echo Checking Application Directory",
+              "echo ==========================================",
+
+              "test -d /home/ec2-user/Java-springboot-project",
+
+              "cd /home/ec2-user/Java-springboot-project",
 
               "echo Current directory:",
               "pwd",
 
               "echo ==========================================",
-              "echo Updating Git Repository",
+              "echo Checking Git Repository",
+              "echo ==========================================",
+
+              "git status",
+
+              "echo ==========================================",
+              "echo Updating Repository",
               "echo ==========================================",
 
               "git reset --hard",
@@ -137,21 +160,31 @@ jobs:
               "git pull origin main",
 
               "echo ==========================================",
-              "echo Building Backend",
+              "echo Moving To Backend",
               "echo ==========================================",
 
               "cd backend",
+
+              "pwd",
+
+              "echo ==========================================",
+              "echo Building Spring Boot Application",
+              "echo ==========================================",
+
               "mvn clean package -DskipTests -U",
 
               "echo ==========================================",
-              "echo Checking generated JAR",
+              "echo Checking Generated JAR",
               "echo ==========================================",
 
               "ls -lh target/",
+
               "test -f target/datastore-0.0.7.jar",
 
+              "echo JAR file found successfully",
+
               "echo ==========================================",
-              "echo Stopping Existing Application",
+              "echo Stopping Old Application",
               "echo ==========================================",
 
               "sudo systemctl stop datastore.service || true",
@@ -159,7 +192,7 @@ jobs:
               "sleep 5",
 
               "echo ==========================================",
-              "echo Checking Old Application",
+              "echo Checking Application Status",
               "echo ==========================================",
 
               "sudo systemctl status datastore.service --no-pager || true",
@@ -171,13 +204,13 @@ jobs:
               "sudo systemctl start datastore.service",
 
               "echo ==========================================",
-              "echo Waiting for Application",
+              "echo Waiting For Application Startup",
               "echo ==========================================",
 
               "sleep 15",
 
               "echo ==========================================",
-              "echo Systemd Status",
+              "echo Checking Systemd Service",
               "echo ==========================================",
 
               "sudo systemctl status datastore.service --no-pager",
@@ -189,26 +222,37 @@ jobs:
               "sudo ss -lntp | grep :8084",
 
               "echo ==========================================",
-              "echo Checking Spring Boot Health",
+              "echo Checking Application Health",
               "echo ==========================================",
 
               "curl -sf http://localhost:8084/actuator/health",
 
               "echo",
+
               "echo ==========================================",
-              "echo Deployment Successful",
+              "echo Checking Health Status",
+              "echo ==========================================",
+
+              "curl -sf http://localhost:8084/actuator/health | grep -q '\''\"status\":\"UP\"'\''",
+
+              "echo",
+
+              "echo ==========================================",
+              "echo BACKEND DEPLOYMENT SUCCESSFUL",
               "echo =========================================="
             ]' \
             --region "$AWS_REGION" \
             --query "Command.CommandId" \
             --output text)
 
-          echo "SSM Command ID: $COMMAND_ID"
+          echo ""
+          echo "SSM COMMAND ID:"
+          echo "$COMMAND_ID"
 
-          echo "Waiting for SSM deployment..."
-
-          # Do not use the AWS waiter directly because we want
-          # to print stdout/stderr even when the remote command fails.
+          echo ""
+          echo "=========================================="
+          echo "WAITING FOR SSM COMMAND"
+          echo "=========================================="
 
           while true
           do
@@ -220,7 +264,7 @@ jobs:
               --query "Status" \
               --output text)
 
-            echo "Current SSM status: $STATUS"
+            echo "Current status: $STATUS"
 
             case "$STATUS" in
 
@@ -229,17 +273,26 @@ jobs:
                 ;;
 
               Success)
+                echo "SSM command completed successfully."
                 break
                 ;;
 
               Failed|Cancelled|TimedOut|Cancelling)
+
                 echo ""
                 echo "=========================================="
                 echo "SSM COMMAND FAILED"
                 echo "=========================================="
 
                 echo ""
-                echo "STANDARD OUTPUT:"
+                echo "STATUS:"
+                echo "$STATUS"
+
+                echo ""
+                echo "=========================================="
+                echo "STANDARD OUTPUT"
+                echo "=========================================="
+
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
                   --instance-id "$EC2_INSTANCE_ID" \
@@ -248,7 +301,10 @@ jobs:
                   --output text || true
 
                 echo ""
-                echo "STANDARD ERROR:"
+                echo "=========================================="
+                echo "STANDARD ERROR"
+                echo "=========================================="
+
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
                   --instance-id "$EC2_INSTANCE_ID" \
@@ -257,17 +313,9 @@ jobs:
                   --output text || true
 
                 echo ""
-                echo "STATUS DETAILS:"
-
-                aws ssm get-command-invocation \
-                  --command-id "$COMMAND_ID" \
-                  --instance-id "$EC2_INSTANCE_ID" \
-                  --region "$AWS_REGION" \
-                  --query "StatusDetails" \
-                  --output text || true
-
-                echo ""
-                echo "RESPONSE CODE:"
+                echo "=========================================="
+                echo "RESPONSE CODE"
+                echo "=========================================="
 
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
@@ -276,11 +324,23 @@ jobs:
                   --query "ResponseCode" \
                   --output text || true
 
+                echo ""
+                echo "=========================================="
+                echo "STATUS DETAILS"
+                echo "=========================================="
+
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StatusDetails" \
+                  --output text || true
+
                 exit 1
                 ;;
 
               *)
-                echo "Unexpected status: $STATUS"
+                echo "Unknown status: $STATUS"
                 sleep 5
                 ;;
 
@@ -301,9 +361,10 @@ jobs:
             --query "StandardOutputContent" \
             --output text
 
+
           echo ""
           echo "=========================================="
-          echo "DEPLOYMENT ERRORS"
+          echo "DEPLOYMENT STDERR"
           echo "=========================================="
 
           aws ssm get-command-invocation \
@@ -315,7 +376,7 @@ jobs:
 
 
       # ==========================================
-      # 8. Final Verification Through SSM
+      # 8. Final Backend Verification
       # ==========================================
       - name: Verify Backend
         shell: bash
@@ -324,7 +385,7 @@ jobs:
           set -e
 
           echo "=========================================="
-          echo "Running Final Backend Verification"
+          echo "FINAL BACKEND VERIFICATION"
           echo "=========================================="
 
           COMMAND_ID=$(aws ssm send-command \
@@ -333,23 +394,53 @@ jobs:
             --comment "Verify Spring Boot Backend" \
             --timeout-seconds 120 \
             --parameters 'commands=[
-              "echo Checking datastore service",
+
+              "echo ==========================================",
+              "echo Checking Datastore Service",
+              "echo ==========================================",
+
               "sudo systemctl is-active --quiet datastore.service",
 
-              "echo Checking port 8084",
+              "echo Datastore service is ACTIVE",
+
+              "echo ==========================================",
+              "echo Checking Port 8084",
+              "echo ==========================================",
+
               "sudo ss -lntp | grep :8084",
 
-              "echo Checking Spring Boot health",
+              "echo ==========================================",
+              "echo Checking Spring Boot Health",
+              "echo ==========================================",
+
               "curl -sf http://localhost:8084/actuator/health",
 
-              "echo Backend verification successful"
+              "echo",
+
+              "echo ==========================================",
+              "echo Checking Health Status",
+              "echo ==========================================",
+
+              "curl -sf http://localhost:8084/actuator/health | grep -q '\''\"status\":\"UP\"'\''",
+
+              "echo",
+
+              "echo ==========================================",
+              "echo BACKEND VERIFICATION SUCCESSFUL",
+              "echo =========================================="
+
             ]' \
             --region "$AWS_REGION" \
             --query "Command.CommandId" \
             --output text)
 
-          echo "Verification Command ID: $COMMAND_ID"
+          echo ""
+          echo "VERIFICATION COMMAND ID:"
+          echo "$COMMAND_ID"
 
+
+          echo ""
+          echo "Waiting for verification..."
 
           while true
           do
@@ -370,6 +461,7 @@ jobs:
                 ;;
 
               Success)
+                echo "Verification successful."
                 break
                 ;;
 
@@ -377,11 +469,11 @@ jobs:
 
                 echo ""
                 echo "=========================================="
-                echo "VERIFICATION FAILED"
+                echo "BACKEND VERIFICATION FAILED"
                 echo "=========================================="
 
                 echo ""
-                echo "OUTPUT:"
+                echo "STANDARD OUTPUT:"
 
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
@@ -391,7 +483,7 @@ jobs:
                   --output text || true
 
                 echo ""
-                echo "ERROR:"
+                echo "STANDARD ERROR:"
 
                 aws ssm get-command-invocation \
                   --command-id "$COMMAND_ID" \
