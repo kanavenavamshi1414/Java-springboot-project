@@ -39,7 +39,10 @@ jobs:
             echo "        FRONTEND DEPLOYMENT STARTED"
             echo "=================================================="
 
+            echo "Current user:"
             whoami
+
+            echo "Hostname:"
             hostname
 
 
@@ -52,12 +55,21 @@ jobs:
             REPO_URL="https://github.com/CloudTechDevOps/Java-springboot-project.git"
 
             FRONTEND_DIR="$APP_DIR/$REPO_NAME/frontend"
+
             BACKEND_IP="${{ secrets.BACKEND_PRIVATE_IP }}"
 
-            echo "Application directory: $APP_DIR"
-            echo "Repository: $REPO_NAME"
-            echo "Frontend directory: $FRONTEND_DIR"
-            echo "Backend private IP: $BACKEND_IP"
+
+            echo "Application directory:"
+            echo "$APP_DIR"
+
+            echo "Repository:"
+            echo "$REPO_NAME"
+
+            echo "Frontend directory:"
+            echo "$FRONTEND_DIR"
+
+            echo "Backend private IP:"
+            echo "$BACKEND_IP"
 
 
             # ==================================================
@@ -74,7 +86,9 @@ jobs:
             # PREPARE APPLICATION DIRECTORY
             # ==================================================
 
+            echo "=================================================="
             echo "Preparing application directory"
+            echo "=================================================="
 
             mkdir -p "$APP_DIR"
 
@@ -85,7 +99,9 @@ jobs:
             # CLONE OR UPDATE REPOSITORY
             # ==================================================
 
+            echo "=================================================="
             echo "Updating repository"
+            echo "=================================================="
 
             if [ -d "$REPO_NAME/.git" ]; then
 
@@ -112,7 +128,14 @@ jobs:
             fi
 
 
-            echo "Current commit:"
+            # ==================================================
+            # CURRENT COMMIT
+            # ==================================================
+
+            echo "=================================================="
+            echo "Current commit"
+            echo "=================================================="
+
             git rev-parse --short HEAD
 
 
@@ -120,17 +143,20 @@ jobs:
             # INSTALL PYTHON
             # ==================================================
 
+            echo "=================================================="
             echo "Installing Python"
+            echo "=================================================="
 
-            sudo dnf install -y \
-              python3 \
-              python3-pip \
-              python3-devel
+            sudo dnf install -y python3 python3-pip python3-devel
 
 
             # ==================================================
-            # CHECK FRONTEND
+            # CHECK FRONTEND DIRECTORY
             # ==================================================
+
+            echo "=================================================="
+            echo "Checking frontend directory"
+            echo "=================================================="
 
             if [ ! -d "$FRONTEND_DIR" ]; then
 
@@ -138,6 +164,7 @@ jobs:
               echo "$FRONTEND_DIR"
 
               echo "Repository contents:"
+
               find "$APP_DIR/$REPO_NAME" -maxdepth 2 -type f | sort
 
               exit 1
@@ -148,12 +175,17 @@ jobs:
             cd "$FRONTEND_DIR"
 
             echo "Frontend files:"
+
             ls -la
 
 
             # ==================================================
             # CHECK APPLICATION FILES
             # ==================================================
+
+            echo "=================================================="
+            echo "Checking application files"
+            echo "=================================================="
 
             if [ ! -f "app.py" ]; then
               echo "ERROR: app.py not found"
@@ -170,7 +202,9 @@ jobs:
             # STOP OLD SERVICE
             # ==================================================
 
-            echo "Stopping existing frontend service"
+            echo "=================================================="
+            echo "Stopping old frontend service"
+            echo "=================================================="
 
             sudo systemctl stop frontend.service || true
 
@@ -179,9 +213,13 @@ jobs:
             # CREATE VIRTUAL ENVIRONMENT
             # ==================================================
 
+            echo "=================================================="
+            echo "Preparing Python virtual environment"
+            echo "=================================================="
+
             if [ ! -f "venv/bin/python" ]; then
 
-              echo "Creating Python virtual environment"
+              echo "Creating virtual environment"
 
               rm -rf venv
 
@@ -189,7 +227,7 @@ jobs:
 
             else
 
-              echo "Existing virtual environment found"
+              echo "Virtual environment already exists"
 
             fi
 
@@ -198,6 +236,10 @@ jobs:
             # FIX OWNERSHIP
             # ==================================================
 
+            echo "=================================================="
+            echo "Fixing ownership"
+            echo "=================================================="
+
             sudo chown -R ec2-user:ec2-user "$FRONTEND_DIR"
 
 
@@ -205,7 +247,9 @@ jobs:
             # INSTALL DEPENDENCIES
             # ==================================================
 
+            echo "=================================================="
             echo "Installing Python dependencies"
+            echo "=================================================="
 
             ./venv/bin/python -m pip install --upgrade pip
 
@@ -216,7 +260,9 @@ jobs:
             # VERIFY STREAMLIT
             # ==================================================
 
+            echo "=================================================="
             echo "Checking Streamlit"
+            echo "=================================================="
 
             ./venv/bin/python -m streamlit --version
 
@@ -225,7 +271,9 @@ jobs:
             # TEST APPLICATION
             # ==================================================
 
+            echo "=================================================="
             echo "Testing Streamlit application"
+            echo "=================================================="
 
             rm -f /tmp/frontend-test.log
 
@@ -237,6 +285,7 @@ jobs:
               > /tmp/frontend-test.log 2>&1 || true
 
             echo "Streamlit test output:"
+
             cat /tmp/frontend-test.log || true
 
 
@@ -244,58 +293,74 @@ jobs:
             # CREATE SYSTEMD SERVICE
             # ==================================================
 
-            echo "Creating frontend systemd service"
+            echo "=================================================="
+            echo "Creating systemd service"
+            echo "=================================================="
 
-            sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
-[Unit]
-Description=Streamlit Frontend Application
-After=network.target
+            sudo rm -f /etc/systemd/system/frontend.service
 
-[Service]
-Type=simple
-User=ec2-user
-Group=ec2-user
-
-WorkingDirectory=$FRONTEND_DIR
-
-ExecStart=$FRONTEND_DIR/venv/bin/python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
-
-Environment="API_URL=http://$BACKEND_IP:8084"
-
-Restart=always
-RestartSec=5
-
-StandardOutput=append:/home/ec2-user/frontend.log
-StandardError=append:/home/ec2-user/frontend-error.log
-
-[Install]
-WantedBy=multi-user.target
-EOF
+            sudo printf '%s\n' \
+              '[Unit]' \
+              'Description=Streamlit Frontend Application' \
+              'After=network.target' \
+              '' \
+              '[Service]' \
+              'Type=simple' \
+              'User=ec2-user' \
+              'Group=ec2-user' \
+              "WorkingDirectory=$FRONTEND_DIR" \
+              "ExecStart=$FRONTEND_DIR/venv/bin/python -m streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true" \
+              "Environment=API_URL=http://$BACKEND_IP:8084" \
+              'Restart=always' \
+              'RestartSec=5' \
+              'StandardOutput=append:/home/ec2-user/frontend.log' \
+              'StandardError=append:/home/ec2-user/frontend-error.log' \
+              '' \
+              '[Install]' \
+              'WantedBy=multi-user.target' \
+              | sudo tee /etc/systemd/system/frontend.service > /dev/null
 
 
             # ==================================================
-            # SHOW SERVICE
+            # SHOW SERVICE CONFIGURATION
             # ==================================================
 
+            echo "=================================================="
             echo "Frontend service configuration"
+            echo "=================================================="
 
             sudo cat /etc/systemd/system/frontend.service
 
 
             # ==================================================
-            # SYSTEMD RELOAD
+            # SYSTEMD DAEMON RELOAD
             # ==================================================
 
+            echo "=================================================="
+            echo "Reloading systemd"
+            echo "=================================================="
+
             sudo systemctl daemon-reload
+
+
+            # ==================================================
+            # ENABLE SERVICE
+            # ==================================================
+
+            echo "=================================================="
+            echo "Enabling frontend service"
+            echo "=================================================="
 
             sudo systemctl enable frontend.service
 
 
             # ==================================================
-            # START FRONTEND
+            # START SERVICE
             # ==================================================
 
+            echo "=================================================="
             echo "Starting frontend"
+            echo "=================================================="
 
             sudo systemctl restart frontend.service
 
@@ -304,7 +369,7 @@ EOF
             # WAIT
             # ==================================================
 
-            echo "Waiting for frontend..."
+            echo "Waiting for frontend to start..."
 
             sleep 10
 
@@ -313,11 +378,15 @@ EOF
             # SERVICE CHECK
             # ==================================================
 
+            echo "=================================================="
+            echo "Checking frontend service"
+            echo "=================================================="
+
             if ! sudo systemctl is-active --quiet frontend.service; then
 
               echo "ERROR: Frontend service failed"
 
-              echo "--------------- STATUS ---------------"
+              echo "--------------- SYSTEMD STATUS ---------------"
 
               sudo systemctl status frontend.service \
                 --no-pager \
@@ -330,7 +399,7 @@ EOF
                 --no-pager \
                 -n 100 || true
 
-              echo "--------------- ERROR LOG ---------------"
+              echo "--------------- FRONTEND ERROR LOG ---------------"
 
               sudo cat /home/ec2-user/frontend-error.log || true
 
@@ -345,7 +414,9 @@ EOF
             # PORT CHECK
             # ==================================================
 
+            echo "=================================================="
             echo "Checking port 8501"
+            echo "=================================================="
 
             if ! sudo ss -lntp | grep -q ":8501"; then
 
@@ -367,7 +438,9 @@ EOF
             # HTTP CHECK
             # ==================================================
 
+            echo "=================================================="
             echo "Checking HTTP"
+            echo "=================================================="
 
             HTTP_CODE=$(curl \
               -s \
@@ -383,7 +456,7 @@ EOF
 
               echo "ERROR: Frontend HTTP check failed"
 
-              echo "--------------- STATUS ---------------"
+              echo "--------------- SYSTEMD STATUS ---------------"
 
               sudo systemctl status frontend.service \
                 --no-pager \
@@ -396,7 +469,7 @@ EOF
                 --no-pager \
                 -n 100 || true
 
-              echo "--------------- ERROR LOG ---------------"
+              echo "--------------- FRONTEND ERROR LOG ---------------"
 
               sudo cat /home/ec2-user/frontend-error.log || true
 
