@@ -1,3 +1,4 @@
+
 name: Backend to Private EC2
 
 on:
@@ -6,6 +7,10 @@ on:
 jobs:
   build-deploy:
     runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: eu-north-1
+      EC2_INSTANCE_ID: ${{ secrets.EC2_INSTANCE_ID }}
 
     steps:
 
@@ -39,169 +44,389 @@ jobs:
 
 
       # ==========================================
-      # 4. Check SSM
+      # 4. Verify AWS Identity
       # ==========================================
-      - name: Check EC2 SSM Connection
+      - name: Verify AWS Credentials
         run: |
-          echo "Checking SSM managed instances..."
+          echo "Checking AWS identity..."
+          aws sts get-caller-identity
 
-          aws ssm describe-instance-information \
-            --region eu-north-1
+          echo "AWS Region:"
+          echo "$AWS_REGION"
 
-          echo "Checking selected EC2 instance..."
-
-          aws ssm describe-instance-information \
-            --filters "Key=InstanceIds,Values=${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1
+          echo "EC2 Instance:"
+          echo "$EC2_INSTANCE_ID"
 
 
       # ==========================================
-      # 5. Deploy Backend using SSM
+      # 5. Check EC2 Instance
+      # ==========================================
+      - name: Check EC2 Instance
+        run: |
+
+          echo "Checking EC2 instance..."
+
+          aws ec2 describe-instances \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query 'Reservations[0].Instances[0].[InstanceId,State.Name,PrivateIpAddress]' \
+            --output table
+
+
+      # ==========================================
+      # 6. Check SSM Connection
+      # ==========================================
+      - name: Check SSM Connection
+        run: |
+
+          echo "Checking SSM managed instance..."
+
+          aws ssm describe-instance-information \
+            --filters "Key=InstanceIds,Values=$EC2_INSTANCE_ID" \
+            --region "$AWS_REGION" \
+            --query 'InstanceInformationList[*].[InstanceId,PingStatus,AgentVersion,PlatformName]' \
+            --output table
+
+
+      # ==========================================
+      # 7. Deploy Backend Through SSM
       # ==========================================
       - name: Deploy Backend using SSM
         shell: bash
         run: |
 
-          echo "Sending deployment command to EC2..."
+          set -e
+
+          echo "=========================================="
+          echo "Sending deployment command to private EC2"
+          echo "=========================================="
 
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Deploy Spring Boot Backend" \
+            --timeout-seconds 600 \
             --parameters 'commands=[
               "set -e",
 
-              "echo ==============================",
+              "echo ==========================================",
               "echo Starting Backend Deployment",
-              "echo ==============================",
+              "echo ==========================================",
+
+              "echo Checking current user",
+              "whoami",
+
+              "echo Checking Java",
+              "java -version",
+
+              "echo Checking Maven",
+              "mvn -version",
 
               "echo Checking application directory",
               "cd /home/ec2-user/app/Java-springboot-project",
 
-              "echo Updating repository",
+              "echo Current directory:",
+              "pwd",
+
+              "echo ==========================================",
+              "echo Updating Git Repository",
+              "echo ==========================================",
+
               "git reset --hard",
               "git clean -fd",
               "git pull origin main",
 
-              "echo Moving to backend directory",
-              "cd backend",
+              "echo ==========================================",
+              "echo Building Backend",
+              "echo ==========================================",
 
-              "echo Building Spring Boot application",
+              "cd backend",
               "mvn clean package -DskipTests -U",
 
-              "echo ==============================",
-              "echo Stopping old application",
-              "echo ==============================",
+              "echo ==========================================",
+              "echo Checking generated JAR",
+              "echo ==========================================",
+
+              "ls -lh target/",
+              "test -f target/datastore-0.0.7.jar",
+
+              "echo ==========================================",
+              "echo Stopping Existing Application",
+              "echo ==========================================",
 
               "sudo systemctl stop datastore.service || true",
 
               "sleep 5",
 
-              "echo ==============================",
-              "echo Starting new application",
-              "echo ==============================",
+              "echo ==========================================",
+              "echo Checking Old Application",
+              "echo ==========================================",
+
+              "sudo systemctl status datastore.service --no-pager || true",
+
+              "echo ==========================================",
+              "echo Starting New Application",
+              "echo ==========================================",
 
               "sudo systemctl start datastore.service",
 
-              "echo Waiting for application startup",
+              "echo ==========================================",
+              "echo Waiting for Application",
+              "echo ==========================================",
+
               "sleep 15",
 
-              "echo ==============================",
-              "echo Checking systemd status",
-              "echo ==============================",
+              "echo ==========================================",
+              "echo Systemd Status",
+              "echo ==========================================",
 
               "sudo systemctl status datastore.service --no-pager",
 
-              "echo ==============================",
-              "echo Checking application health",
-              "echo ==============================",
+              "echo ==========================================",
+              "echo Checking Port 8084",
+              "echo ==========================================",
 
-              "HEALTH=$(curl -sf http://localhost:8084/actuator/health)",
-              "echo \"$HEALTH\"",
+              "sudo ss -lntp | grep :8084",
 
-              "echo \"$HEALTH\" | grep -q '\''\"status\":\"UP\"'\''",
+              "echo ==========================================",
+              "echo Checking Spring Boot Health",
+              "echo ==========================================",
 
-              "echo ==============================",
-              "echo Deployment successful!",
-              "echo =============================="
+              "curl -sf http://localhost:8084/actuator/health",
+
+              "echo",
+              "echo ==========================================",
+              "echo Deployment Successful",
+              "echo =========================================="
             ]' \
-            --timeout-seconds 600 \
-            --region eu-north-1 \
+            --region "$AWS_REGION" \
             --query "Command.CommandId" \
             --output text)
 
           echo "SSM Command ID: $COMMAND_ID"
 
-          echo "Waiting for deployment to finish..."
+          echo "Waiting for SSM deployment..."
 
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1
+          # Do not use the AWS waiter directly because we want
+          # to print stdout/stderr even when the remote command fails.
 
-          echo "Getting deployment output..."
+          while true
+          do
+
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --region "$AWS_REGION" \
+              --query "Status" \
+              --output text)
+
+            echo "Current SSM status: $STATUS"
+
+            case "$STATUS" in
+
+              Pending|InProgress)
+                sleep 5
+                ;;
+
+              Success)
+                break
+                ;;
+
+              Failed|Cancelled|TimedOut|Cancelling)
+                echo ""
+                echo "=========================================="
+                echo "SSM COMMAND FAILED"
+                echo "=========================================="
+
+                echo ""
+                echo "STANDARD OUTPUT:"
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StandardOutputContent" \
+                  --output text || true
+
+                echo ""
+                echo "STANDARD ERROR:"
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StandardErrorContent" \
+                  --output text || true
+
+                echo ""
+                echo "STATUS DETAILS:"
+
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StatusDetails" \
+                  --output text || true
+
+                echo ""
+                echo "RESPONSE CODE:"
+
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "ResponseCode" \
+                  --output text || true
+
+                exit 1
+                ;;
+
+              *)
+                echo "Unexpected status: $STATUS"
+                sleep 5
+                ;;
+
+            esac
+
+          done
+
+
+          echo ""
+          echo "=========================================="
+          echo "DEPLOYMENT OUTPUT"
+          echo "=========================================="
 
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1 \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --region "$AWS_REGION" \
             --query "StandardOutputContent" \
             --output text
 
-          echo "Getting deployment errors..."
+          echo ""
+          echo "=========================================="
+          echo "DEPLOYMENT ERRORS"
+          echo "=========================================="
 
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1 \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --region "$AWS_REGION" \
             --query "StandardErrorContent" \
-            --output text
+            --output text || true
 
 
       # ==========================================
-      # 6. Final Health Check
+      # 8. Final Verification Through SSM
       # ==========================================
       - name: Verify Backend
         shell: bash
         run: |
 
-          echo "Running final health check through SSM..."
+          set -e
+
+          echo "=========================================="
+          echo "Running Final Backend Verification"
+          echo "=========================================="
 
           COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "${{ secrets.EC2_INSTANCE_ID }}" \
+            --instance-ids "$EC2_INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
             --comment "Verify Spring Boot Backend" \
+            --timeout-seconds 120 \
             --parameters 'commands=[
               "echo Checking datastore service",
-              "sudo systemctl is-active datastore.service",
+              "sudo systemctl is-active --quiet datastore.service",
 
               "echo Checking port 8084",
               "sudo ss -lntp | grep :8084",
 
-              "echo Checking Spring Boot health endpoint",
+              "echo Checking Spring Boot health",
               "curl -sf http://localhost:8084/actuator/health",
 
               "echo Backend verification successful"
             ]' \
-            --timeout-seconds 120 \
-            --region eu-north-1 \
+            --region "$AWS_REGION" \
             --query "Command.CommandId" \
             --output text)
 
-          echo "Health Check Command ID: $COMMAND_ID"
+          echo "Verification Command ID: $COMMAND_ID"
 
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1
 
-          echo "Health check output:"
+          while true
+          do
+
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --region "$AWS_REGION" \
+              --query "Status" \
+              --output text)
+
+            echo "Verification status: $STATUS"
+
+            case "$STATUS" in
+
+              Pending|InProgress)
+                sleep 5
+                ;;
+
+              Success)
+                break
+                ;;
+
+              Failed|Cancelled|TimedOut|Cancelling)
+
+                echo ""
+                echo "=========================================="
+                echo "VERIFICATION FAILED"
+                echo "=========================================="
+
+                echo ""
+                echo "OUTPUT:"
+
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StandardOutputContent" \
+                  --output text || true
+
+                echo ""
+                echo "ERROR:"
+
+                aws ssm get-command-invocation \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$EC2_INSTANCE_ID" \
+                  --region "$AWS_REGION" \
+                  --query "StandardErrorContent" \
+                  --output text || true
+
+                exit 1
+                ;;
+
+              *)
+                sleep 5
+                ;;
+
+            esac
+
+          done
+
+
+          echo ""
+          echo "=========================================="
+          echo "FINAL VERIFICATION OUTPUT"
+          echo "=========================================="
 
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
-            --instance-id "${{ secrets.EC2_INSTANCE_ID }}" \
-            --region eu-north-1 \
+            --instance-id "$EC2_INSTANCE_ID" \
+            --region "$AWS_REGION" \
             --query "StandardOutputContent" \
             --output text
 
-          echo "Backend deployment completed successfully."
+
+          echo ""
+          echo "=========================================="
+          echo "BACKEND DEPLOYMENT COMPLETED SUCCESSFULLY"
+          echo "=========================================="
+
