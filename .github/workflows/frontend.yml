@@ -1,7 +1,4 @@
-name: Frontend to Public EC2
 
-on:
-  workflow_dispatch:
 name: Frontend to Public EC2
 
 on:
