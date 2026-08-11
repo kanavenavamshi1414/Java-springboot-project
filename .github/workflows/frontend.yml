@@ -2,6 +2,10 @@ name: Frontend to Public EC2
 
 on:
   workflow_dispatch:
+name: Frontend to Public EC2
+
+on:
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -183,48 +187,183 @@ jobs:
 
             sudo tee /etc/systemd/system/frontend.service > /dev/null <<'EOF'
 
-[Unit]
-Description=Streamlit Frontend Application
-After=network.target
+```yaml
+name: Frontend to Public EC2
 
-[Service]
-Type=simple
-User=ec2-user
+on:
+  workflow_dispatch:
 
-WorkingDirectory=/home/ec2-user/front/Java-springboot-project/frontend
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
 
-ExecStart=/home/ec2-user/front/Java-springboot-project/frontend/venv/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+    steps:
 
-Environment="API_URL=http://${BACKEND_PRIVATE_IP}:8084"
-
-Restart=always
-RestartSec=5
-
-StandardOutput=append:/home/ec2-user/frontend.log
-StandardError=append:/home/ec2-user/frontend-error.log
-
-[Install]
-WantedBy=multi-user.target
-
-EOF
+      # ==================================================
+      # 1. Checkout Repository
+      # ==================================================
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
 
-            # ==================================================
-            # 11. Replace Backend IP
-            # ==================================================
+      # ==================================================
+      # 2. Deploy Frontend to Public EC2
+      # ==================================================
+      - name: Deploy Frontend via SSH
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.FRONTEND_EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.FRONTEND_EC2_KEY }}
+          port: 22
+          timeout: 60s
+          command_timeout: 20m
+
+          script: |
+            set -e
 
             echo "=========================================="
-            echo "Configuring Backend Connection"
+            echo "Starting Frontend Deployment"
             echo "=========================================="
 
-            sudo sed -i \
-              "s|\${BACKEND_PRIVATE_IP}|${{ secrets.BACKEND_PRIVATE_IP }}|g" \
-              /etc/systemd/system/frontend.service
+            echo "Current user:"
+            whoami
 
+            echo "Python:"
+            python3 --version || true
 
-            # ==================================================
-            # 12. Reload Systemd
-            # ==================================================
+            echo "=========================================="
+            echo "Preparing Application Directory"
+            echo "=========================================="
+
+            APP_DIR="/home/ec2-user/front"
+            REPO_NAME="Java-springboot-project"
+            REPO_URL="https://github.com/CloudTechDevOps/Java-springboot-project.git"
+
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+
+            echo "=========================================="
+            echo "Updating Repository"
+            echo "=========================================="
+
+            if [ -d "$REPO_NAME/.git" ]; then
+
+              echo "Repository already exists"
+
+              cd "$REPO_NAME"
+
+              git reset --hard
+              git clean -fd
+
+              git fetch origin
+              git checkout main
+              git pull origin main
+
+            else
+
+              echo "Repository does not exist"
+              echo "Cloning repository..."
+
+              git clone "$REPO_URL" "$REPO_NAME"
+
+              cd "$REPO_NAME"
+
+            fi
+
+            echo "=========================================="
+            echo "Installing Python"
+            echo "=========================================="
+
+            sudo dnf install -y python3 python3-pip python3-devel
+
+            echo "=========================================="
+            echo "Checking Frontend Directory"
+            echo "=========================================="
+
+            FRONTEND_DIR="/home/ec2-user/front/Java-springboot-project/frontend"
+
+            if [ ! -d "$FRONTEND_DIR" ]; then
+              echo "ERROR: Frontend directory not found"
+              exit 1
+            fi
+
+            cd "$FRONTEND_DIR"
+
+            echo "Frontend directory:"
+            pwd
+
+            echo "Frontend files:"
+            ls -la
+
+            echo "=========================================="
+            echo "Creating Virtual Environment"
+            echo "=========================================="
+
+            if [ ! -d "venv" ]; then
+              python3 -m venv venv
+            fi
+
+            echo "=========================================="
+            echo "Installing Python Dependencies"
+            echo "=========================================="
+
+            source venv/bin/activate
+
+            python -m pip install --upgrade pip
+
+            if [ -f requirements.txt ]; then
+
+              pip install -r requirements.txt
+
+            else
+
+              echo "WARNING: requirements.txt not found"
+
+            fi
+
+            deactivate || true
+
+            echo "=========================================="
+            echo "Stopping Existing Frontend"
+            echo "=========================================="
+
+            sudo systemctl stop frontend.service || true
+
+            echo "=========================================="
+            echo "Creating Frontend Systemd Service"
+            echo "=========================================="
+
+            sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
+            [Unit]
+            Description=Streamlit Frontend Application
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=ec2-user
+
+            WorkingDirectory=/home/ec2-user/front/Java-springboot-project/frontend
+
+            ExecStart=/home/ec2-user/front/Java-springboot-project/frontend/venv/bin/streamlit run app.py --server.port=8501 --server.address=0.0.0.0
+
+            Environment="API_URL=http://${{ secrets.BACKEND_PRIVATE_IP }}:8084"
+
+            Restart=always
+            RestartSec=5
+
+            StandardOutput=append:/home/ec2-user/frontend.log
+            StandardError=append:/home/ec2-user/frontend-error.log
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            echo "=========================================="
+            echo "Checking Systemd Service"
+            echo "=========================================="
+
+            sudo cat /etc/systemd/system/frontend.service
 
             echo "=========================================="
             echo "Reloading Systemd"
@@ -234,55 +373,65 @@ EOF
 
             sudo systemctl enable frontend.service
 
-
-            # ==================================================
-            # 13. Start Frontend
-            # ==================================================
-
             echo "=========================================="
             echo "Starting Frontend"
             echo "=========================================="
 
             sudo systemctl restart frontend.service
 
-
-            # ==================================================
-            # 14. Wait for Startup
-            # ==================================================
-
             echo "Waiting for frontend startup..."
 
             sleep 15
 
-
-            # ==================================================
-            # 15. Check Service
-            # ==================================================
-
             echo "=========================================="
-            echo "Frontend Service Status"
+            echo "Checking Frontend Service"
             echo "=========================================="
 
-            sudo systemctl status frontend.service --no-pager || true
+            if ! sudo systemctl is-active --quiet frontend.service; then
 
+              echo "ERROR: Frontend service failed"
 
-            # ==================================================
-            # 16. Check Port
-            # ==================================================
+              sudo systemctl status frontend.service --no-pager || true
+
+              echo "=========================================="
+              echo "Frontend Journal Logs"
+              echo "=========================================="
+
+              sudo journalctl \
+                -u frontend.service \
+                --no-pager \
+                -n 100
+
+              echo "=========================================="
+              echo "Frontend Error Log"
+              echo "=========================================="
+
+              sudo tail -100 /home/ec2-user/frontend-error.log || true
+
+              exit 1
+
+            fi
+
+            echo "Frontend service is running"
 
             echo "=========================================="
             echo "Checking Port 8501"
             echo "=========================================="
 
-            sudo ss -lntp | grep :8501
+            if ! sudo ss -lntp | grep -q ':8501'; then
 
+              echo "ERROR: Port 8501 is not listening"
 
-            # ==================================================
-            # 17. Check HTTP
-            # ==================================================
+              sudo systemctl status frontend.service --no-pager
+
+              exit 1
+
+            fi
+
+            echo "Port 8501 is listening"
 
             echo "=========================================="
-            echo "Checking Frontend HTTP Response"
+            echo "Checking Frontend HTTP"
             echo "=========================================="
 
             HTTP_CODE=$(curl \
@@ -297,9 +446,8 @@ EOF
 
             if [ "$HTTP_CODE" != "200" ]; then
 
-              echo "Frontend HTTP check failed"
+              echo "ERROR: Frontend HTTP check failed"
 
-              echo "Frontend logs:"
               sudo journalctl \
                 -u frontend.service \
                 --no-pager \
@@ -309,24 +457,47 @@ EOF
 
             fi
 
+            echo "=========================================="
+            echo "Testing Backend Connection"
+            echo "=========================================="
 
-            # ==================================================
-            # 18. Deployment Successful
-            # ==================================================
+            echo "Backend IP: ${{ secrets.BACKEND_PRIVATE_IP }}"
+            echo "Backend Port: 8084"
+
+            if curl \
+              -s \
+              --max-time 10 \
+              "http://${{ secrets.BACKEND_PRIVATE_IP }}:8084/actuator/health"
+            then
+
+              echo ""
+              echo "Backend is reachable from frontend EC2"
+
+            else
+
+              echo ""
+              echo "WARNING: Backend health endpoint is not reachable"
+
+              echo "This may be caused by:"
+              echo "1. Backend Security Group"
+              echo "2. Backend service not running"
+              echo "3. Port 8084 not allowed from frontend SG"
+              echo "4. Backend application not listening on 0.0.0.0"
+
+            fi
 
             echo "=========================================="
             echo "Frontend Deployment Successful"
             echo "=========================================="
 
             echo "Frontend Port: 8501"
-
             echo "Backend: ${{ secrets.BACKEND_PRIVATE_IP }}:8084"
 
             echo "=========================================="
 
 
       # ==================================================
-      # 19. Final Verification
+      # 3. Final Frontend Verification
       # ==================================================
       - name: Verify Frontend
         uses: appleboy/ssh-action@v1.1.0
@@ -339,14 +510,13 @@ EOF
           command_timeout: 5m
 
           script: |
-
             set -e
 
             echo "=========================================="
             echo "Final Frontend Verification"
             echo "=========================================="
 
-            echo "Checking systemd service"
+            echo "Checking service..."
 
             if ! sudo systemctl is-active --quiet frontend.service; then
 
@@ -363,16 +533,17 @@ EOF
 
             fi
 
-
             echo "Frontend service is running"
 
+            echo "=========================================="
+            echo "Checking Port 8501"
+            echo "=========================================="
 
-            echo "Checking port 8501"
+            sudo ss -lntp | grep ':8501'
 
-            sudo ss -lntp | grep :8501
-
-
+            echo "=========================================="
             echo "Checking HTTP"
+            echo "=========================================="
 
             curl \
               -L \
@@ -381,14 +552,15 @@ EOF
               http://localhost:8501 \
               > /dev/null
 
+            echo "Frontend HTTP check successful"
 
             echo "=========================================="
-            echo "Frontend Verification Successful"
+            echo "Final Verification Successful"
             echo "=========================================="
 
 
       # ==================================================
-      # 20. Email Notification
+      # 4. Email Notification
       # ==================================================
       - name: Send Deployment Report
         if: always()
