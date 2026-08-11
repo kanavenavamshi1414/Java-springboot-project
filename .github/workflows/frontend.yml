@@ -39,10 +39,7 @@ jobs:
             echo "        FRONTEND DEPLOYMENT STARTED"
             echo "=================================================="
 
-            echo "Current user:"
             whoami
-
-            echo "Hostname:"
             hostname
 
 
@@ -55,21 +52,12 @@ jobs:
             REPO_URL="https://github.com/CloudTechDevOps/Java-springboot-project.git"
 
             FRONTEND_DIR="$APP_DIR/$REPO_NAME/frontend"
-
             BACKEND_IP="${{ secrets.BACKEND_PRIVATE_IP }}"
 
-
-            echo "Application directory:"
-            echo "$APP_DIR"
-
-            echo "Repository:"
-            echo "$REPO_NAME"
-
-            echo "Frontend directory:"
-            echo "$FRONTEND_DIR"
-
-            echo "Backend private IP:"
-            echo "$BACKEND_IP"
+            echo "Application directory: $APP_DIR"
+            echo "Repository: $REPO_NAME"
+            echo "Frontend directory: $FRONTEND_DIR"
+            echo "Backend private IP: $BACKEND_IP"
 
 
             # ==================================================
@@ -86,9 +74,7 @@ jobs:
             # PREPARE APPLICATION DIRECTORY
             # ==================================================
 
-            echo "=================================================="
             echo "Preparing application directory"
-            echo "=================================================="
 
             mkdir -p "$APP_DIR"
 
@@ -99,9 +85,7 @@ jobs:
             # CLONE OR UPDATE REPOSITORY
             # ==================================================
 
-            echo "=================================================="
             echo "Updating repository"
-            echo "=================================================="
 
             if [ -d "$REPO_NAME/.git" ]; then
 
@@ -128,14 +112,7 @@ jobs:
             fi
 
 
-            # ==================================================
-            # SHOW COMMIT
-            # ==================================================
-
-            echo "=================================================="
-            echo "Current commit"
-            echo "=================================================="
-
+            echo "Current commit:"
             git rev-parse --short HEAD
 
 
@@ -143,9 +120,7 @@ jobs:
             # INSTALL PYTHON
             # ==================================================
 
-            echo "=================================================="
             echo "Installing Python"
-            echo "=================================================="
 
             sudo dnf install -y \
               python3 \
@@ -154,22 +129,21 @@ jobs:
 
 
             # ==================================================
-            # CHECK FRONTEND DIRECTORY
+            # CHECK FRONTEND
             # ==================================================
 
-            echo "=================================================="
-            echo "Checking frontend directory"
-            echo "=================================================="
-
             if [ ! -d "$FRONTEND_DIR" ]; then
-              echo "ERROR: Frontend directory not found"
-              echo "Expected:"
+
+              echo "ERROR: Frontend directory not found:"
               echo "$FRONTEND_DIR"
-              echo ""
+
               echo "Repository contents:"
               find "$APP_DIR/$REPO_NAME" -maxdepth 2 -type f | sort
+
               exit 1
+
             fi
+
 
             cd "$FRONTEND_DIR"
 
@@ -181,10 +155,6 @@ jobs:
             # CHECK APPLICATION FILES
             # ==================================================
 
-            echo "=================================================="
-            echo "Checking application files"
-            echo "=================================================="
-
             if [ ! -f "app.py" ]; then
               echo "ERROR: app.py not found"
               exit 1
@@ -195,32 +165,23 @@ jobs:
               exit 1
             fi
 
-            echo "app.py found"
-            echo "requirements.txt found"
-
 
             # ==================================================
             # STOP OLD SERVICE
             # ==================================================
 
-            echo "=================================================="
             echo "Stopping existing frontend service"
-            echo "=================================================="
 
             sudo systemctl stop frontend.service || true
 
 
             # ==================================================
-            # CREATE PYTHON VIRTUAL ENVIRONMENT
+            # CREATE VIRTUAL ENVIRONMENT
             # ==================================================
-
-            echo "=================================================="
-            echo "Preparing Python virtual environment"
-            echo "=================================================="
 
             if [ ! -f "venv/bin/python" ]; then
 
-              echo "Creating new virtual environment"
+              echo "Creating Python virtual environment"
 
               rm -rf venv
 
@@ -237,20 +198,14 @@ jobs:
             # FIX OWNERSHIP
             # ==================================================
 
-            echo "=================================================="
-            echo "Fixing ownership"
-            echo "=================================================="
-
             sudo chown -R ec2-user:ec2-user "$FRONTEND_DIR"
 
 
             # ==================================================
-            # INSTALL PYTHON DEPENDENCIES
+            # INSTALL DEPENDENCIES
             # ==================================================
 
-            echo "=================================================="
             echo "Installing Python dependencies"
-            echo "=================================================="
 
             ./venv/bin/python -m pip install --upgrade pip
 
@@ -261,20 +216,16 @@ jobs:
             # VERIFY STREAMLIT
             # ==================================================
 
-            echo "=================================================="
             echo "Checking Streamlit"
-            echo "=================================================="
 
             ./venv/bin/python -m streamlit --version
 
 
             # ==================================================
-            # TEST STREAMLIT APPLICATION
+            # TEST APPLICATION
             # ==================================================
 
-            echo "=================================================="
             echo "Testing Streamlit application"
-            echo "=================================================="
 
             rm -f /tmp/frontend-test.log
 
@@ -293,9 +244,7 @@ jobs:
             # CREATE SYSTEMD SERVICE
             # ==================================================
 
-            echo "=================================================="
             echo "Creating frontend systemd service"
-            echo "=================================================="
 
             sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
 [Unit]
@@ -325,12 +274,10 @@ EOF
 
 
             # ==================================================
-            # SHOW SERVICE CONFIGURATION
+            # SHOW SERVICE
             # ==================================================
 
-            echo "=================================================="
             echo "Frontend service configuration"
-            echo "=================================================="
 
             sudo cat /etc/systemd/system/frontend.service
 
@@ -338,10 +285,6 @@ EOF
             # ==================================================
             # SYSTEMD RELOAD
             # ==================================================
-
-            echo "=================================================="
-            echo "Reloading systemd"
-            echo "=================================================="
 
             sudo systemctl daemon-reload
 
@@ -352,18 +295,16 @@ EOF
             # START FRONTEND
             # ==================================================
 
-            echo "=================================================="
             echo "Starting frontend"
-            echo "=================================================="
 
             sudo systemctl restart frontend.service
 
 
             # ==================================================
-            # WAIT FOR APPLICATION
+            # WAIT
             # ==================================================
 
-            echo "Waiting for frontend to start..."
+            echo "Waiting for frontend..."
 
             sleep 10
 
@@ -372,22 +313,16 @@ EOF
             # SERVICE CHECK
             # ==================================================
 
-            echo "=================================================="
-            echo "Checking frontend service"
-            echo "=================================================="
-
             if ! sudo systemctl is-active --quiet frontend.service; then
 
               echo "ERROR: Frontend service failed"
 
-              echo ""
-              echo "--------------- SYSTEMD STATUS ---------------"
+              echo "--------------- STATUS ---------------"
 
               sudo systemctl status frontend.service \
                 --no-pager \
                 -l || true
 
-              echo ""
               echo "--------------- JOURNAL ---------------"
 
               sudo journalctl \
@@ -395,8 +330,7 @@ EOF
                 --no-pager \
                 -n 100 || true
 
-              echo ""
-              echo "--------------- FRONTEND ERROR LOG ---------------"
+              echo "--------------- ERROR LOG ---------------"
 
               sudo cat /home/ec2-user/frontend-error.log || true
 
@@ -411,9 +345,7 @@ EOF
             # PORT CHECK
             # ==================================================
 
-            echo "=================================================="
             echo "Checking port 8501"
-            echo "=================================================="
 
             if ! sudo ss -lntp | grep -q ":8501"; then
 
@@ -432,12 +364,10 @@ EOF
 
 
             # ==================================================
-            # LOCAL HTTP CHECK
+            # HTTP CHECK
             # ==================================================
 
-            echo "=================================================="
             echo "Checking HTTP"
-            echo "=================================================="
 
             HTTP_CODE=$(curl \
               -s \
@@ -453,14 +383,12 @@ EOF
 
               echo "ERROR: Frontend HTTP check failed"
 
-              echo ""
-              echo "--------------- SYSTEMD STATUS ---------------"
+              echo "--------------- STATUS ---------------"
 
               sudo systemctl status frontend.service \
                 --no-pager \
                 -l || true
 
-              echo ""
               echo "--------------- JOURNAL ---------------"
 
               sudo journalctl \
@@ -468,8 +396,7 @@ EOF
                 --no-pager \
                 -n 100 || true
 
-              echo ""
-              echo "--------------- FRONTEND ERROR LOG ---------------"
+              echo "--------------- ERROR LOG ---------------"
 
               sudo cat /home/ec2-user/frontend-error.log || true
 
@@ -477,25 +404,20 @@ EOF
 
             fi
 
-            echo "HTTP check successful."
-
 
             # ==================================================
-            # DEPLOYMENT SUCCESS
+            # SUCCESS
             # ==================================================
 
             echo "=================================================="
             echo "        FRONTEND DEPLOYMENT SUCCESSFUL"
             echo "=================================================="
 
-            echo "Frontend:"
+            echo "Frontend URL:"
             echo "http://${{ secrets.EC2_HOST }}:8501"
 
-            echo "Backend private IP:"
-            echo "$BACKEND_IP"
-
-            echo "Backend port:"
-            echo "8084"
+            echo "Backend:"
+            echo "http://$BACKEND_IP:8084"
 
             echo "=================================================="
 
